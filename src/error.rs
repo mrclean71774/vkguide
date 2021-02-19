@@ -1,12 +1,13 @@
 use std::fmt;
 
+// Error handling will be different from the tutorial because Rust.
 #[derive(Debug)]
 pub enum Error {
-  FromVkcapi(vkcapi::Error),
-  FromVkcboot(vkcboot::Error),
-  FromIO(std::io::Error),
-  Str(&'static str),
-  String(String),
+  FromVkcapi(vkcapi::Error),   // map_err from vkcapi
+  FromVkcboot(vkcboot::Error), // map_err from vkcboot
+  FromIO(std::io::Error),      // map_err from std::io::Error
+  Str(&'static str),           // error with &str message
+  String(String),              // error with String message
 }
 
 impl std::fmt::Display for Error {
