@@ -14,6 +14,75 @@ use {
 #[cfg(feature = "validation")]
 use vkcapi::ext::vk_ext_debug_utils::*;
 
+// Don't know what kind of voodoo the C++ is doing but this is my solution for resource cleanup.
+// We will have a vector of enum Resouce(s). The enum carries the info needed for destruction,
+// and we match on the enum in ResourceDestructor flush.
+#[derive(Clone, Copy)]
+pub enum Resource {
+  SdlQuit,
+  SdlWindow(*mut sdl2::SDL_Window),
+  VkInstance(vkcapi::core::v1_0::VkInstance),
+  VkDebugUtilsMessengerEXT(VkDebugUtilsMessengerEXT),
+  VkSurfaceKHR(vkcapi::ext::vk_khr_surface::VkSurfaceKHR),
+  VkDevice(VkDevice),
+  VkSwapchainKHR(VkSwapchainKHR),
+  VkCommandPool(VkCommandPool),
+  VkRenderPass(VkRenderPass),
+  VkImageView(VkImageView),
+  VkFramebuffer(VkFramebuffer),
+  VkSemaphore(VkSemaphore),
+  VkFence(VkFence),
+  VkPipelineLayout(VkPipelineLayout),
+  VkPipeline(VkPipeline),
+}
+
+pub struct ResourceDestuctor {
+  resources: Vec<Resource>,
+}
+
+impl ResourceDestuctor {
+  pub fn new() -> ResourceDestuctor {
+    ResourceDestuctor {
+      resources: Vec::new(),
+    }
+  }
+
+  pub fn push(&mut self, res: Resource) {
+    self.resources.push(res)
+  }
+
+  pub fn flush(&mut self, instance: vkcapi::core::v1_0::VkInstance, device: VkDevice) {
+    while !self.resources.is_empty() {
+      let res = self.resources.pop().unwrap();
+      match res {
+        Resource::SdlQuit => unsafe { SDL_Quit() },
+        Resource::SdlWindow(window) => unsafe { sdl2::SDL_DestroyWindow(window) },
+        Resource::VkInstance(inst) => unsafe { vkDestroyInstance(instance, null()) },
+        Resource::VkDebugUtilsMessengerEXT(debug_messenger) => unsafe {
+          vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, null())
+        },
+        Resource::VkSurfaceKHR(surface) => unsafe {
+          vkDestroySurfaceKHR(instance, surface, null())
+        },
+        Resource::VkDevice(dev) => unsafe { vkDestroyDevice(dev, null()) },
+        Resource::VkSwapchainKHR(swapchain) => unsafe {
+          vkDestroySwapchainKHR(device, swapchain, null())
+        },
+        Resource::VkCommandPool(pool) => unsafe { vkDestroyCommandPool(device, pool, null()) },
+        Resource::VkRenderPass(pass) => unsafe { vkDestroyRenderPass(device, pass, null()) },
+        Resource::VkImageView(iv) => unsafe { vkDestroyImageView(device, iv, null()) },
+        Resource::VkFramebuffer(fb) => unsafe { vkDestroyFramebuffer(device, fb, null()) },
+        Resource::VkSemaphore(sem) => unsafe { vkDestroySemaphore(device, sem, null()) },
+        Resource::VkFence(fence) => unsafe { vkDestroyFence(device, fence, null()) },
+        Resource::VkPipelineLayout(pipe_layout) => unsafe {
+          vkDestroyPipelineLayout(device, pipe_layout, null())
+        },
+        Resource::VkPipeline(pipe) => unsafe { vkDestroyPipeline(device, pipe, null()) },
+      }
+    }
+  }
+}
+
 pub struct VulkanEngine {
   is_initialized: bool,
   frame_number: i32,
@@ -52,6 +121,8 @@ pub struct VulkanEngine {
   triangle_pipeline_layout: VkPipelineLayout,
   triangle_pipeline: VkPipeline,
   red_triangle_pipeline: VkPipeline,
+
+  main_deletion_queue: ResourceDestuctor,
 
   selected_shader: i32,
 }
@@ -100,6 +171,8 @@ impl VulkanEngine {
       triangle_pipeline: null(),
       red_triangle_pipeline: null(),
 
+      main_deletion_queue: ResourceDestuctor::new(),
+
       selected_shader: 0,
     }
   }
@@ -109,6 +182,7 @@ impl VulkanEngine {
     // We initialize SDL and create a window with it.
     unsafe {
       SDL_Init(SDL_INIT_VIDEO);
+      self.main_deletion_queue.push(Resource::SdlQuit);
       let window_flags = SDL_WINDOW_VULKAN;
 
       // create blank window for our application
@@ -120,6 +194,9 @@ impl VulkanEngine {
         self.window_extent.height as i32,         // window height in pixels
         window_flags,
       );
+      self
+        .main_deletion_queue
+        .push(Resource::SdlWindow(self.window));
     }
 
     // load the core Vulkan structures
@@ -147,43 +224,8 @@ impl VulkanEngine {
   // shuts down the engine
   pub fn cleanup(&mut self) {
     if self.is_initialized {
-      unsafe {
-        vkDestroyPipeline(self.device, self.red_triangle_pipeline, null());
-        vkDestroyPipeline(self.device, self.triangle_pipeline, null());
-        vkDestroyPipelineLayout(self.device, self.triangle_pipeline_layout, null());
-        // tutorial is missing the cleanup of sync structures
-        vkDestroyFence(self.device, self.render_fence, null());
-        vkDestroySemaphore(self.device, self.render_semaphore, null());
-        vkDestroySemaphore(self.device, self.present_semaphore, null());
-
-        vkDestroyCommandPool(self.device, self.command_pool, null());
-        vkDestroySwapchainKHR(self.device, self.swapchain, null());
-
-        // destroy the main render_pass
-        vkDestroyRenderPass(self.device, self.render_pass, null());
-
-        // destroy swapchain resources
-        self
-          .framebuffers
-          .iter()
-          .for_each(|fb| vkDestroyFramebuffer(self.device, *fb, null()));
-
-        self
-          .swapchain_image_views
-          .iter()
-          .for_each(|iv| vkDestroyImageView(self.device, *iv, null()));
-
-        vkDestroyDevice(self.device, null());
-        vkDestroySurfaceKHR(self.instance, self.surface, null());
-
-        #[cfg(feature = "validation")]
-        vkDestroyDebugUtilsMessengerEXT(self.instance, self.debug_messenger, null());
-
-        vkDestroyInstance(self.instance, null());
-
-        SDL_DestroyWindow(self.window);
-        SDL_Quit(); // why doesn't the tutorial do this?
-      }
+      // using the deletion queue for everything, unlike the tutorial
+      self.main_deletion_queue.flush(self.instance, self.device);
     }
   }
 
@@ -345,15 +387,25 @@ impl VulkanEngine {
       .with_version(1, 1)
       .build()
       .map_err(|e| Error::FromVkcboot(e))?;
+    self
+      .main_deletion_queue
+      .push(Resource::VkInstance(self.instance));
+
     // using validation feature to turn validation layers on/off same as vkcboot
     #[cfg(feature = "validation")]
     {
       self.debug_messenger =
         vkcboot::DebugMessenger::new(self.instance).map_err(|e| Error::FromVkcboot(e))?;
+      self
+        .main_deletion_queue
+        .push(Resource::VkDebugUtilsMessengerEXT(self.debug_messenger));
     }
 
     // vkcboot uses sdl2 to get surface
     self.surface = vkcboot::Surface::new(self.window, self.instance);
+    self
+      .main_deletion_queue
+      .push(Resource::VkSurfaceKHR(self.surface));
 
     let device = vkcboot::DeviceBuilder::new(self.instance, self.surface)
       .with_version(1, 1)
@@ -362,6 +414,9 @@ impl VulkanEngine {
 
     self.chosen_gpu = device.physical_device;
     self.device = device.device;
+    self
+      .main_deletion_queue
+      .push(Resource::VkDevice(self.device));
 
     // we have a separate queue handle for presentation even thought they might
     // refer to the same queue family. On my machine they are the same but I don't
@@ -394,6 +449,15 @@ impl VulkanEngine {
     self.swapchain_format = swapchain.format;
     self.swapchain_image_views = swapchain.image_views;
 
+    self
+      .main_deletion_queue
+      .push(Resource::VkSwapchainKHR(self.swapchain));
+
+    for i in 0..self.swapchain_image_views.len() {
+      self
+        .main_deletion_queue
+        .push(Resource::VkImageView(self.swapchain_image_views[i]));
+    }
     Ok(())
   }
 
@@ -413,6 +477,9 @@ impl VulkanEngine {
         &mut self.command_pool
       ));
     }
+    self
+      .main_deletion_queue
+      .push(Resource::VkCommandPool(self.command_pool));
 
     // allocate the default command buffer that we will use for rendering
     let cmd_alloc_info = vkinit::command_buffer_allocate_info(
@@ -492,6 +559,9 @@ impl VulkanEngine {
         &mut self.render_pass
       ));
     }
+    self
+      .main_deletion_queue
+      .push(Resource::VkRenderPass(self.render_pass));
     Ok(())
   }
 
@@ -525,6 +595,9 @@ impl VulkanEngine {
           null(),
           &mut self.framebuffers[i]
         ));
+        self
+          .main_deletion_queue
+          .push(Resource::VkFramebuffer(self.framebuffers[i]));
       }
     }
     Ok(())
@@ -547,6 +620,9 @@ impl VulkanEngine {
         &mut self.render_fence
       ));
     }
+    self
+      .main_deletion_queue
+      .push(Resource::VkFence(self.render_fence));
 
     // for the semaphores we don't need any flags
     let semaphore_create_info = VkSemaphoreCreateInfo {
@@ -561,12 +637,18 @@ impl VulkanEngine {
         null(),
         &mut self.render_semaphore
       ));
+      self
+        .main_deletion_queue
+        .push(Resource::VkSemaphore(self.render_semaphore));
       VK_CHECK!(vkCreateSemaphore(
         self.device,
         &semaphore_create_info,
         null(),
         &mut self.present_semaphore
       ));
+      self
+        .main_deletion_queue
+        .push(Resource::VkSemaphore(self.present_semaphore));
     }
     Ok(())
   }
@@ -629,6 +711,9 @@ impl VulkanEngine {
         &mut self.triangle_pipeline_layout
       ));
     }
+    self
+      .main_deletion_queue
+      .push(Resource::VkPipelineLayout(self.triangle_pipeline_layout));
 
     self.triangle_pipeline = PipelineBuilder::new()
       // build the stage-create-info for both vertex and fragment stages.
@@ -675,6 +760,9 @@ impl VulkanEngine {
       .pipeline_layout(self.triangle_pipeline_layout)
       // finally build the pipeline
       .build(self.device, self.render_pass)?;
+    self
+      .main_deletion_queue
+      .push(Resource::VkPipeline(self.triangle_pipeline));
 
     self.red_triangle_pipeline = PipelineBuilder::new()
       .push_shader_stage(vkinit::pipeline_shader_stage_create_info(
@@ -710,6 +798,9 @@ impl VulkanEngine {
       .color_blend_attachment(vkinit::color_blend_attachment_state())
       .pipeline_layout(self.triangle_pipeline_layout)
       .build(self.device, self.render_pass)?;
+    self
+      .main_deletion_queue
+      .push(Resource::VkPipeline(self.red_triangle_pipeline));
 
     unsafe {
       vkDestroyShaderModule(self.device, triangle_vert_shader, null());
