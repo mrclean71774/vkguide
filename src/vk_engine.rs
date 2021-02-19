@@ -1,4 +1,5 @@
 use {
+  crate::{error::Error, VK_CHECK},
   sdl2::*,
   std::{mem::zeroed, ptr::null_mut},
   vkcapi::core::v1_0::*,
