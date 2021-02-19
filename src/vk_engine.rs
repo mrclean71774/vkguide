@@ -41,6 +41,9 @@ pub struct VulkanEngine {
 
   command_pool: VkCommandPool, // the command pool for our commands
   main_command_buffer: VkCommandBuffer, // the buffer we will record into
+
+  render_pass: VkRenderPass,
+  framebuffers: Vec<VkFramebuffer>,
 }
 
 impl VulkanEngine {
@@ -75,6 +78,9 @@ impl VulkanEngine {
 
       command_pool: null(),
       main_command_buffer: null(),
+
+      render_pass: null(),
+      framebuffers: Vec::new(),
     }
   }
 
@@ -104,6 +110,10 @@ impl VulkanEngine {
 
     self.init_commands()?;
 
+    self.init_default_renderpass()?;
+
+    self.init_framebuffers()?;
+
     // everything went fine
     self.is_initialized = true;
 
@@ -116,6 +126,15 @@ impl VulkanEngine {
       unsafe {
         vkDestroyCommandPool(self.device, self.command_pool, null());
         vkDestroySwapchainKHR(self.device, self.swapchain, null());
+
+        // destroy the main render_pass
+        vkDestroyRenderPass(self.device, self.render_pass, null());
+
+        // destroy swapchain resources
+        self
+          .framebuffers
+          .iter()
+          .for_each(|fb| vkDestroyFramebuffer(self.device, *fb, null()));
 
         self
           .swapchain_image_views
@@ -248,6 +267,106 @@ impl VulkanEngine {
         &cmd_alloc_info,
         &mut self.main_command_buffer
       ));
+    }
+    Ok(())
+  }
+
+  fn init_default_renderpass(&mut self) -> Result<(), Error> {
+    // the renderpass will use this color attachment
+    let color_attachment = VkAttachmentDescription {
+      flags: 0,
+      // the attachment will have the format needed by the swapchain
+      format: self.swapchain_format,
+      // 1 sample, we won't be doing MSAA
+      samples: VK_SAMPLE_COUNT_1_BIT,
+      // we Clear when this attachment is loaded
+      loadOp: VK_ATTACHMENT_LOAD_OP_CLEAR,
+      // we keep the attachment stored when the renderpass ends
+      storeOp: VK_ATTACHMENT_STORE_OP_STORE,
+      stencilLoadOp: VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+      stencilStoreOp: VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      // we don't know or care about the starting layout of the attachment
+      initialLayout: VK_IMAGE_LAYOUT_UNDEFINED,
+      // after the renderpass ends, the image has to be on a layout ready for display
+      finalLayout: VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+    };
+
+    let color_attachment_ref = VkAttachmentReference {
+      // attachment number will index into the pAttachments array in the parent renderpass
+      attachment: 0,
+      layout: VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+
+    // we are going to create 1 subpass, which is the minimum you can do
+    let subpass = VkSubpassDescription {
+      flags: 0,
+      pipelineBindPoint: VK_PIPELINE_BIND_POINT_GRAPHICS,
+      inputAttachmentCount: 0,
+      pInputAttachments: null(),
+      colorAttachmentCount: 1,
+      pColorAttachments: &color_attachment_ref,
+      pResolveAttachments: null(),
+      pDepthStencilAttachment: null(),
+      preserveAttachmentCount: 0,
+      pPreserveAttachments: null(),
+    };
+
+    let render_pass_info = VkRenderPassCreateInfo {
+      sType: VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+      pNext: null(),
+      flags: 0,
+      // connect the color attachment to the info
+      attachmentCount: 1,
+      pAttachments: &color_attachment,
+      // conntect the subpass to the info
+      subpassCount: 1,
+      pSubpasses: &subpass,
+      dependencyCount: 0,
+      pDependencies: null(),
+    };
+
+    unsafe {
+      VK_CHECK!(vkCreateRenderPass(
+        self.device,
+        &render_pass_info,
+        null(),
+        &mut self.render_pass
+      ));
+    }
+    Ok(())
+  }
+
+  fn init_framebuffers(&mut self) -> Result<(), Error> {
+    // create the framebuffers for the swapchain images. This will connect
+    // the render-pass to the images for rendering
+    let mut fb_info = VkFramebufferCreateInfo {
+      sType: VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+      pNext: null(),
+      flags: 0,
+      renderPass: self.render_pass,
+      attachmentCount: 1,
+      pAttachments: null(),
+      width: self.window_extent.width,
+      height: self.window_extent.height,
+      layers: 1,
+    };
+
+    // grab how many images we have in the swapchain
+    self
+      .framebuffers
+      .resize(self.swapchain_images.len(), null());
+
+    // create framebuffers for each of the swapchain image views
+    for i in 0..self.swapchain_image_views.len() {
+      fb_info.pAttachments = &self.swapchain_image_views[i];
+      unsafe {
+        VK_CHECK!(vkCreateFramebuffer(
+          self.device,
+          &fb_info,
+          null(),
+          &mut self.framebuffers[i]
+        ));
+      }
     }
     Ok(())
   }
