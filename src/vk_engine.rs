@@ -57,7 +57,7 @@ impl ResourceDestuctor {
       match res {
         Resource::SdlQuit => unsafe { SDL_Quit() },
         Resource::SdlWindow(window) => unsafe { sdl2::SDL_DestroyWindow(window) },
-        Resource::VkInstance(inst) => unsafe { vkDestroyInstance(instance, null()) },
+        Resource::VkInstance(instance) => unsafe { vkDestroyInstance(instance, null()) },
         Resource::VkDebugUtilsMessengerEXT(debug_messenger) => unsafe {
           vkDestroyDebugUtilsMessengerEXT(instance, debug_messenger, null())
         },
