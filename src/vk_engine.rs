@@ -1,5 +1,5 @@
 use {
-  crate::{error::Error, VK_CHECK},
+  crate::{error::Error, vk_initializers as vkinit, VK_CHECK},
   sdl2::*,
   std::{
     mem::zeroed,
@@ -38,6 +38,9 @@ pub struct VulkanEngine {
   swapchain_format: VkFormat, // image format expected by windowing system
   swapchain_images: Vec<VkImage>, // array of images from the swapchain
   swapchain_image_views: Vec<VkImageView>, // array of image-views from the swapchain
+
+  command_pool: VkCommandPool, // the command pool for our commands
+  main_command_buffer: VkCommandBuffer, // the buffer we will record into
 }
 
 impl VulkanEngine {
@@ -69,6 +72,9 @@ impl VulkanEngine {
       swapchain_format: unsafe { zeroed() },
       swapchain_images: Vec::new(),
       swapchain_image_views: Vec::new(),
+
+      command_pool: null(),
+      main_command_buffer: null(),
     }
   }
 
@@ -96,6 +102,8 @@ impl VulkanEngine {
     // create the swapchain
     self.init_swapchain()?;
 
+    self.init_commands()?;
+
     // everything went fine
     self.is_initialized = true;
 
@@ -106,6 +114,7 @@ impl VulkanEngine {
   pub fn cleanup(&mut self) {
     if self.is_initialized {
       unsafe {
+        vkDestroyCommandPool(self.device, self.command_pool, null());
         vkDestroySwapchainKHR(self.device, self.swapchain, null());
 
         self
@@ -176,7 +185,9 @@ impl VulkanEngine {
     self.chosen_gpu = device.physical_device;
     self.device = device.device;
 
-    // we get the queues a little earlier than the tutorial
+    // we have a separate queue handle for presentation even thought they might
+    // refer to the same queue family. On my machine they are the same but I don't
+    // think they have to be on all devices.
     self.graphics_queue = device.graphics_queue;
     self.graphics_queue_index = device.graphics_queue_index;
 
@@ -205,6 +216,39 @@ impl VulkanEngine {
     self.swapchain_format = swapchain.format;
     self.swapchain_image_views = swapchain.image_views;
 
+    Ok(())
+  }
+
+  fn init_commands(&mut self) -> Result<(), Error> {
+    // create a command pool for commands submitted to the graphics queue
+    let command_pool_info = vkinit::command_pool_create_info(
+      // the command pool will be the one that can submit graphics commands
+      self.graphics_queue_index,
+      // we also want the pool to allow for resetting of individual command buffers
+      Some(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT),
+    );
+    unsafe {
+      VK_CHECK!(vkCreateCommandPool(
+        self.device,
+        &command_pool_info,
+        null(),
+        &mut self.command_pool
+      ));
+    }
+
+    // allocate the default command buffer that we will use for rendering
+    let cmd_alloc_info = vkinit::command_buffer_allocate_info(
+      self.command_pool, // commands will be made from our command pool
+      1,                 // we will allocate 1 command buffer
+      None,              // primary is the default level
+    );
+    unsafe {
+      VK_CHECK!(vkAllocateCommandBuffers(
+        self.device,
+        &cmd_alloc_info,
+        &mut self.main_command_buffer
+      ));
+    }
     Ok(())
   }
 }
