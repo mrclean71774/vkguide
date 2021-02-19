@@ -51,6 +51,9 @@ pub struct VulkanEngine {
 
   triangle_pipeline_layout: VkPipelineLayout,
   triangle_pipeline: VkPipeline,
+  red_triangle_pipeline: VkPipeline,
+
+  selected_shader: i32,
 }
 
 impl VulkanEngine {
@@ -95,6 +98,9 @@ impl VulkanEngine {
 
       triangle_pipeline_layout: null(),
       triangle_pipeline: null(),
+      red_triangle_pipeline: null(),
+
+      selected_shader: 0,
     }
   }
 
@@ -142,6 +148,7 @@ impl VulkanEngine {
   pub fn cleanup(&mut self) {
     if self.is_initialized {
       unsafe {
+        vkDestroyPipeline(self.device, self.red_triangle_pipeline, null());
         vkDestroyPipeline(self.device, self.triangle_pipeline, null());
         vkDestroyPipelineLayout(self.device, self.triangle_pipeline_layout, null());
         // tutorial is missing the cleanup of sync structures
@@ -238,7 +245,15 @@ impl VulkanEngine {
       };
       vkCmdBeginRenderPass(cmd, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
 
-      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, self.triangle_pipeline);
+      if self.selected_shader == 0 {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, self.triangle_pipeline);
+      } else {
+        vkCmdBindPipeline(
+          cmd,
+          VK_PIPELINE_BIND_POINT_GRAPHICS,
+          self.red_triangle_pipeline,
+        );
+      }
       vkCmdDraw(cmd, 3, 1, 0, 0);
 
       // finalize the render render_pass
@@ -299,8 +314,19 @@ impl VulkanEngine {
       // Handle events on queue
       while unsafe { SDL_PollEvent(&mut e) } != 0 {
         // close the window when user clicks the X button or alt-f4s
-        if unsafe { e.type_ } == SDL_QUIT {
-          b_quit = true;
+        match unsafe { e.type_ } {
+          SDL_QUIT => b_quit = true,
+          SDL_KEYDOWN => match unsafe { e.key.keysym.sym as u32 } {
+            SDLK_SPACE => {
+              self.selected_shader += 1;
+              if self.selected_shader > 1 {
+                self.selected_shader = 0;
+              }
+            }
+            SDLK_ESCAPE => b_quit = true,
+            _ => {}
+          },
+          _ => {}
         }
       }
       self.draw();
@@ -574,10 +600,19 @@ impl VulkanEngine {
     let (ok, triangle_vert_shader) =
       self.create_shader_module("shaders/colored_triangle.vert.spv")?;
     if !ok {
-      return Err(Error::Str("Error when building triangle.vert.spv"));
+      return Err(Error::Str("Error when building colored_triangle.vert.spv"));
     }
     let (ok, triangle_frag_shader) =
       self.create_shader_module("shaders/colored_triangle.frag.spv")?;
+    if !ok {
+      return Err(Error::Str("Error when building colored_triangle.frag.spv"));
+    }
+
+    let (ok, red_triangle_vert_shader) = self.create_shader_module("shaders/triangle.vert.spv")?;
+    if !ok {
+      return Err(Error::Str("Error when building triangle.vert.spv"));
+    }
+    let (ok, red_triangle_frag_shader) = self.create_shader_module("shaders/triangle.frag.spv")?;
     if !ok {
       return Err(Error::Str("Error when building triangle.frag.spv"));
     }
@@ -641,9 +676,47 @@ impl VulkanEngine {
       // finally build the pipeline
       .build(self.device, self.render_pass)?;
 
+    self.red_triangle_pipeline = PipelineBuilder::new()
+      .push_shader_stage(vkinit::pipeline_shader_stage_create_info(
+        VK_SHADER_STAGE_VERTEX_BIT,
+        red_triangle_vert_shader,
+      ))
+      .push_shader_stage(vkinit::pipeline_shader_stage_create_info(
+        VK_SHADER_STAGE_FRAGMENT_BIT,
+        red_triangle_frag_shader,
+      ))
+      .vertex_input_info(vkinit::vertex_input_state_create_info())
+      .input_assembly(vkinit::input_assembly_state_create_info(
+        VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+      ))
+      .viewport(vkinit::viewport(
+        0.0,
+        0.0,
+        self.window_extent.width as f32,
+        self.window_extent.height as f32,
+        0.0,
+        1.0,
+      ))
+      .scissor(vkinit::rect_2d(
+        0,
+        0,
+        self.window_extent.width,
+        self.window_extent.height,
+      ))
+      .rasterizer(vkinit::rasterization_state_create_info(
+        VK_POLYGON_MODE_FILL,
+      ))
+      .multisampling(vkinit::multisampling_state_create_info())
+      .color_blend_attachment(vkinit::color_blend_attachment_state())
+      .pipeline_layout(self.triangle_pipeline_layout)
+      .build(self.device, self.render_pass)?;
+
     unsafe {
       vkDestroyShaderModule(self.device, triangle_vert_shader, null());
       vkDestroyShaderModule(self.device, triangle_frag_shader, null());
+
+      vkDestroyShaderModule(self.device, red_triangle_vert_shader, null());
+      vkDestroyShaderModule(self.device, red_triangle_frag_shader, null());
     }
     Ok(())
   }
