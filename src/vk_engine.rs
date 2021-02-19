@@ -571,11 +571,13 @@ impl VulkanEngine {
   fn init_pipelines(&mut self) -> Result<(), Error> {
     // a little different than the tutorial, we will be silent if all is well and return
     // an error &str with the offending file name if there was a problem.
-    let (ok, triangle_vert_shader) = self.create_shader_module("shaders/triangle.vert.spv")?;
+    let (ok, triangle_vert_shader) =
+      self.create_shader_module("shaders/colored_triangle.vert.spv")?;
     if !ok {
       return Err(Error::Str("Error when building triangle.vert.spv"));
     }
-    let (ok, triangle_frag_shader) = self.create_shader_module("shaders/triangle.frag.spv")?;
+    let (ok, triangle_frag_shader) =
+      self.create_shader_module("shaders/colored_triangle.frag.spv")?;
     if !ok {
       return Err(Error::Str("Error when building triangle.frag.spv"));
     }
