@@ -124,6 +124,8 @@ impl VulkanEngine {
 
     self.init_sync_structures()?;
 
+    self.init_pipelines()?;
+
     // everything went fine
     self.is_initialized = true;
 
@@ -528,6 +530,48 @@ impl VulkanEngine {
         null(),
         &mut self.present_semaphore
       ));
+    }
+    Ok(())
+  }
+
+  fn create_shader_module(&self, path: &str) -> Result<(bool, VkShaderModule), Error> {
+    // Rust has nice things to load file
+    let source = std::fs::read(path).map_err(|e| Error::FromIO(e))?;
+
+    let create_info = VkShaderModuleCreateInfo {
+      sType: VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+      pNext: null(),
+      flags: 0,
+      codeSize: source.len(),
+      pCode: source.as_ptr() as *const u32,
+    };
+
+    // check that the creation goes well
+    let mut shader_module = null();
+    if unsafe { vkCreateShaderModule(self.device, &create_info, null(), &mut shader_module) }
+      != VK_SUCCESS
+    {
+      Ok((false, shader_module))
+    } else {
+      Ok((true, shader_module))
+    }
+  }
+
+  fn init_pipelines(&mut self) -> Result<(), Error> {
+    // a little different than the tutorial, we will be silent if all is well and return
+    // an error &str with the offending file name if there was a problem.
+    let (ok, triangle_vert_shader) = self.create_shader_module("shaders/triangle.vert.spv")?;
+    if !ok {
+      return Err(Error::Str("Error when building triangle.vert.spv"));
+    }
+    let (ok, triangle_frag_shader) = self.create_shader_module("shaders/triangle.frag.spv")?;
+    if !ok {
+      return Err(Error::Str("Error when building triangle.frag.spv"));
+    }
+
+    unsafe {
+      vkDestroyShaderModule(self.device, triangle_vert_shader, null());
+      vkDestroyShaderModule(self.device, triangle_frag_shader, null());
     }
     Ok(())
   }
