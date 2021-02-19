@@ -34,6 +34,7 @@ impl std::error::Error for Error {
   }
 }
 
+// Expanding on the tutorials macro by showing what the error code means.
 #[macro_export]
 macro_rules! VK_CHECK {
   ($func:expr) => {
@@ -82,7 +83,7 @@ macro_rules! VK_CHECK {
         VK_OPERATION_DEFERRED_KHR => s = "VK_OPERATION_DEFERRED_KHR",
         VK_OPERATION_NOT_DEFERRED_KHR => s = "VK_OPERATION_NOT_DEFERRED_KHR",
         VK_PIPELINE_COMPILE_REQUIRED_EXT => s = "VK_PIPELINE_COMPILE_REQUIRED_EXT",
-        _ => s = "Unknown",
+        _ => s = "This should never happen!?!?",
       }
       panic!("Vulkan error: {}", s);
     }

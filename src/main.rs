@@ -8,7 +8,7 @@ use {error::Error, vk_engine::VulkanEngine};
 fn main() -> Result<(), Error> {
   let mut engine = VulkanEngine::new();
 
-  engine.init();
+  engine.init()?;
 
   engine.run();
 
