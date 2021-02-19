@@ -1,5 +1,5 @@
 use {
-  crate::{error::Error, vk_initializers as vkinit, VK_CHECK},
+  crate::{error::Error, vk_initializers as vkinit, vk_pipeline::PipelineBuilder, VK_CHECK},
   sdl2::*,
   std::{
     mem::zeroed,
@@ -48,6 +48,9 @@ pub struct VulkanEngine {
   present_semaphore: VkSemaphore,
   render_semaphore: VkSemaphore,
   render_fence: VkFence,
+
+  triangle_pipeline_layout: VkPipelineLayout,
+  triangle_pipeline: VkPipeline,
 }
 
 impl VulkanEngine {
@@ -89,6 +92,9 @@ impl VulkanEngine {
       present_semaphore: null(),
       render_semaphore: null(),
       render_fence: null(),
+
+      triangle_pipeline_layout: null(),
+      triangle_pipeline: null(),
     }
   }
 
@@ -136,6 +142,8 @@ impl VulkanEngine {
   pub fn cleanup(&mut self) {
     if self.is_initialized {
       unsafe {
+        vkDestroyPipeline(self.device, self.triangle_pipeline, null());
+        vkDestroyPipelineLayout(self.device, self.triangle_pipeline_layout, null());
         // tutorial is missing the cleanup of sync structures
         vkDestroyFence(self.device, self.render_fence, null());
         vkDestroySemaphore(self.device, self.render_semaphore, null());
@@ -229,6 +237,9 @@ impl VulkanEngine {
         pClearValues: &clear_value,
       };
       vkCmdBeginRenderPass(cmd, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, self.triangle_pipeline);
+      vkCmdDraw(cmd, 3, 1, 0, 0);
 
       // finalize the render render_pass
       vkCmdEndRenderPass(cmd);
@@ -568,6 +579,65 @@ impl VulkanEngine {
     if !ok {
       return Err(Error::Str("Error when building triangle.frag.spv"));
     }
+
+    // build the pipeline layout that controls the inputs/outputs of the shader
+    // we are not using descriptor sets or other system yet so no need to use
+    // anything other than the empty default.
+    let pipeline_layout_info = vkinit::pipeline_layout_create_info();
+    unsafe {
+      VK_CHECK!(vkCreatePipelineLayout(
+        self.device,
+        &pipeline_layout_info,
+        null(),
+        &mut self.triangle_pipeline_layout
+      ));
+    }
+
+    self.triangle_pipeline = PipelineBuilder::new()
+      // build the stage-create-info for both vertex and fragment stages.
+      // This lets the pipeline know the shader modules per stage
+      .push_shader_stage(vkinit::pipeline_shader_stage_create_info(
+        VK_SHADER_STAGE_VERTEX_BIT,
+        triangle_vert_shader,
+      ))
+      .push_shader_stage(vkinit::pipeline_shader_stage_create_info(
+        VK_SHADER_STAGE_FRAGMENT_BIT,
+        triangle_frag_shader,
+      ))
+      // vertex input controls how to read vertices from vertes buffers. We aren't using it yet
+      .vertex_input_info(vkinit::vertex_input_state_create_info())
+      // input assembly is the configuration for drawing triangle lists, strips, or individual
+      // points. We are just going to draw triangle list.
+      .input_assembly(vkinit::input_assembly_state_create_info(
+        VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+      ))
+      // vuild viewport and scissor from the swapchain extents
+      .viewport(vkinit::viewport(
+        0.0,
+        0.0,
+        self.window_extent.width as f32,
+        self.window_extent.height as f32,
+        0.0,
+        1.0,
+      ))
+      .scissor(vkinit::rect_2d(
+        0,
+        0,
+        self.window_extent.width,
+        self.window_extent.height,
+      ))
+      // configure the rasterizer to draw filled triangles
+      .rasterizer(vkinit::rasterization_state_create_info(
+        VK_POLYGON_MODE_FILL,
+      ))
+      // we don't use multisampling, so just run the default one
+      .multisampling(vkinit::multisampling_state_create_info())
+      // a single blend attachment with no blending and writing to RGBA
+      .color_blend_attachment(vkinit::color_blend_attachment_state())
+      // use the triangle layout we created
+      .pipeline_layout(self.triangle_pipeline_layout)
+      // finally build the pipeline
+      .build(self.device, self.render_pass)?;
 
     unsafe {
       vkDestroyShaderModule(self.device, triangle_vert_shader, null());

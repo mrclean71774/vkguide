@@ -1,6 +1,7 @@
 mod error;
 mod vk_engine;
 mod vk_initializers;
+mod vk_pipeline;
 mod vk_types;
 
 use {error::Error, vk_engine::VulkanEngine};
