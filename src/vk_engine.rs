@@ -44,6 +44,10 @@ pub struct VulkanEngine {
 
   render_pass: VkRenderPass,
   framebuffers: Vec<VkFramebuffer>,
+
+  present_semaphore: VkSemaphore,
+  render_semaphore: VkSemaphore,
+  render_fence: VkFence,
 }
 
 impl VulkanEngine {
@@ -81,6 +85,10 @@ impl VulkanEngine {
 
       render_pass: null(),
       framebuffers: Vec::new(),
+
+      present_semaphore: null(),
+      render_semaphore: null(),
+      render_fence: null(),
     }
   }
 
@@ -114,6 +122,8 @@ impl VulkanEngine {
 
     self.init_framebuffers()?;
 
+    self.init_sync_structures()?;
+
     // everything went fine
     self.is_initialized = true;
 
@@ -124,6 +134,11 @@ impl VulkanEngine {
   pub fn cleanup(&mut self) {
     if self.is_initialized {
       unsafe {
+        // tutorial is missing the cleanup of sync structures
+        vkDestroyFence(self.device, self.render_fence, null());
+        vkDestroySemaphore(self.device, self.render_semaphore, null());
+        vkDestroySemaphore(self.device, self.present_semaphore, null());
+
         vkDestroyCommandPool(self.device, self.command_pool, null());
         vkDestroySwapchainKHR(self.device, self.swapchain, null());
 
@@ -157,7 +172,108 @@ impl VulkanEngine {
 
   // draw loop
   fn draw(&mut self) {
-    // nothing yet
+    // wait until the GPU has finished rendering the last frame. Timeout of 1 second
+    unsafe {
+      VK_CHECK!(vkWaitForFences(
+        self.device,
+        1,
+        &self.render_fence,
+        VK_TRUE, // true is not an int in rust
+        1_000_000_000
+      ));
+      VK_CHECK!(vkResetFences(self.device, 1, &self.render_fence));
+
+      // request image from the swapchain, one second timeout
+      let mut swapchain_image_index = 0;
+      VK_CHECK!(vkAcquireNextImageKHR(
+        self.device,
+        self.swapchain,
+        1_000_000_000,
+        self.present_semaphore,
+        null(),
+        &mut swapchain_image_index
+      ));
+
+      // now that we are sure that the commands finished executing,
+      // we can safely reset the command buffer to begin recording again.
+      VK_CHECK!(vkResetCommandBuffer(self.main_command_buffer, 0));
+
+      // naming it cmd for shorter writing
+      let cmd = self.main_command_buffer;
+
+      // begin the command buffer recording. We will use this command buffer
+      // exactly once, so we want to let Vulkan know that
+      let cmd_begin_info = VkCommandBufferBeginInfo {
+        sType: VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        pNext: null(),
+        flags: VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        pInheritanceInfo: null(),
+      };
+      VK_CHECK!(vkBeginCommandBuffer(cmd, &cmd_begin_info));
+
+      // make a clear-color from frame number. This will flash with a 120*pi frame period.
+      let flash = f32::abs(f32::sin(self.frame_number as f32 / 120.0));
+      let clear_value = vkinit::clear_value_f32(0.0, 0.0, flash, 1.0);
+
+      // start the main renderpass. We will use the clear color from above,
+      // and the framebuffer of the index the swapchain gave us.
+      let rp_info = VkRenderPassBeginInfo {
+        sType: VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        pNext: null(),
+        renderPass: self.render_pass,
+        framebuffer: self.framebuffers[swapchain_image_index as usize],
+        renderArea: vkinit::rect_2d(0, 0, self.window_extent.width, self.window_extent.height),
+        clearValueCount: 1,
+        pClearValues: &clear_value,
+      };
+      vkCmdBeginRenderPass(cmd, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+
+      // finalize the render render_pass
+      vkCmdEndRenderPass(cmd);
+      // finalize the command buffer (we can no longer add commands, but it can be executed)
+      VK_CHECK!(vkEndCommandBuffer(cmd));
+
+      // prepare the submission to the queue. We want to wait on the present_semaphore,
+      // as that is signaled when the swapchain is ready.
+      // We will signal the render_semaphore, to signal that rendering is finished.
+      let submit = VkSubmitInfo {
+        sType: VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        pNext: null(),
+        waitSemaphoreCount: 1,
+        pWaitSemaphores: &self.present_semaphore,
+        pWaitDstStageMask: &VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        commandBufferCount: 1,
+        pCommandBuffers: &cmd,
+        signalSemaphoreCount: 1,
+        pSignalSemaphores: &self.render_semaphore,
+      };
+      // submit command buffer to the queue and execute it.
+      // render_fence will now block until the graphic commands finish execution
+      VK_CHECK!(vkQueueSubmit(
+        self.graphics_queue,
+        1,
+        &submit,
+        self.render_fence
+      ));
+
+      // this will put the image we just rendered into the visible window.
+      // we want to wait on the render_semaphore for that, as it's necessary
+      // that drawing commands have finished before the image is displayed to the user.
+      let present_info = VkPresentInfoKHR {
+        sType: VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        pNext: null(),
+        waitSemaphoreCount: 1,
+        pWaitSemaphores: &self.render_semaphore,
+        swapchainCount: 1,
+        pSwapchains: &self.swapchain,
+        pImageIndices: &swapchain_image_index,
+        pResults: null_mut(),
+      };
+      VK_CHECK!(vkQueuePresentKHR(self.graphics_queue, &present_info));
+
+      // increase the number of frames drawn
+      self.frame_number += 1;
+    }
   }
 
   // run main loop
@@ -175,6 +291,10 @@ impl VulkanEngine {
         }
       }
       self.draw();
+    }
+    unsafe {
+      // we need to wait for rendering to finish before starting cleanup
+      vkQueueWaitIdle(self.graphics_queue);
     }
   }
 
@@ -367,6 +487,47 @@ impl VulkanEngine {
           &mut self.framebuffers[i]
         ));
       }
+    }
+    Ok(())
+  }
+
+  fn init_sync_structures(&mut self) -> Result<(), Error> {
+    // create synchronization structures
+    let fence_create_info = VkFenceCreateInfo {
+      sType: VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+      pNext: null(),
+      // we want to create the fence with the Create Signaled flag,
+      // so we can wait on it before using it on a GPU command (for the first frame)
+      flags: VK_FENCE_CREATE_SIGNALED_BIT,
+    };
+    unsafe {
+      VK_CHECK!(vkCreateFence(
+        self.device,
+        &fence_create_info,
+        null(),
+        &mut self.render_fence
+      ));
+    }
+
+    // for the semaphores we don't need any flags
+    let semaphore_create_info = VkSemaphoreCreateInfo {
+      sType: VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+      pNext: null(),
+      flags: 0,
+    };
+    unsafe {
+      VK_CHECK!(vkCreateSemaphore(
+        self.device,
+        &semaphore_create_info,
+        null(),
+        &mut self.render_semaphore
+      ));
+      VK_CHECK!(vkCreateSemaphore(
+        self.device,
+        &semaphore_create_info,
+        null(),
+        &mut self.present_semaphore
+      ));
     }
     Ok(())
   }

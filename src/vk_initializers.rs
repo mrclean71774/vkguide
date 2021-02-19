@@ -30,3 +30,18 @@ pub fn command_buffer_allocate_info(
   }
   info
 }
+
+pub fn clear_value_f32(r: f32, g: f32, b: f32, a: f32) -> VkClearValue {
+  VkClearValue {
+    color: VkClearColorValue {
+      float32: [r, g, b, a],
+    },
+  }
+}
+
+pub fn rect_2d(x: i32, y: i32, width: u32, height: u32) -> VkRect2D {
+  VkRect2D {
+    offset: VkOffset2D { x, y },
+    extent: VkExtent2D { width, height },
+  }
+}
