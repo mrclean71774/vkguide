@@ -1,14 +1,23 @@
 use {
-  crate::{error::Error, vk_initializers as vkinit, vk_pipeline::PipelineBuilder, VK_CHECK},
+  crate::{
+    error::Error,
+    mesh::{Mesh, Vertex},
+    vk_initializers as vkinit,
+    vk_pipeline::PipelineBuilder,
+    vk_types::AllocatedBuffer,
+    VK_CHECK,
+  },
+  lina::vec3::Vec3,
   sdl2::*,
   std::{
-    mem::zeroed,
-    ptr::{null, null_mut},
+    mem::{size_of, zeroed},
+    ptr::{copy_nonoverlapping, null, null_mut},
   },
   vkcapi::{
-    core::v1_0::*,
+    core::{v1_0::*, v1_1::*},
     ext::{vk_khr_surface::*, vk_khr_swapchain::*},
   },
+  vma::*,
 };
 
 #[cfg(feature = "validation")]
@@ -34,6 +43,8 @@ pub enum Resource {
   VkFence(VkFence),
   VkPipelineLayout(VkPipelineLayout),
   VkPipeline(VkPipeline),
+  VmaAllocator(VmaAllocator),
+  VmaAllocatedBuffer(AllocatedBuffer),
 }
 
 pub struct ResourceDestuctor {
@@ -51,7 +62,12 @@ impl ResourceDestuctor {
     self.resources.push(res)
   }
 
-  pub fn flush(&mut self, instance: vkcapi::core::v1_0::VkInstance, device: VkDevice) {
+  pub fn flush(
+    &mut self,
+    instance: vkcapi::core::v1_0::VkInstance,
+    device: VkDevice,
+    allocator: VmaAllocator,
+  ) {
     while !self.resources.is_empty() {
       let res = self.resources.pop().unwrap();
       match res {
@@ -78,6 +94,14 @@ impl ResourceDestuctor {
           vkDestroyPipelineLayout(device, pipe_layout, null())
         },
         Resource::VkPipeline(pipe) => unsafe { vkDestroyPipeline(device, pipe, null()) },
+        Resource::VmaAllocator(allocator) => unsafe { vmaDestroyAllocator(allocator) },
+        Resource::VmaAllocatedBuffer(allocated_buffer) => unsafe {
+          vmaDestroyBuffer(
+            allocator,
+            allocated_buffer.buffer,
+            allocated_buffer.allocation,
+          )
+        },
       }
     }
   }
@@ -122,7 +146,11 @@ pub struct VulkanEngine {
   triangle_pipeline: VkPipeline,
   red_triangle_pipeline: VkPipeline,
 
+  mesh_pipeline: VkPipeline,
+  triangle_mesh: Mesh,
+
   main_deletion_queue: ResourceDestuctor,
+  allocator: VmaAllocator,
 
   selected_shader: i32,
 }
@@ -171,7 +199,11 @@ impl VulkanEngine {
       triangle_pipeline: null(),
       red_triangle_pipeline: null(),
 
+      mesh_pipeline: null(),
+      triangle_mesh: Mesh::new(),
+
       main_deletion_queue: ResourceDestuctor::new(),
+      allocator: null(),
 
       selected_shader: 0,
     }
@@ -215,6 +247,8 @@ impl VulkanEngine {
 
     self.init_pipelines()?;
 
+    self.load_meshes()?;
+
     // everything went fine
     self.is_initialized = true;
 
@@ -225,7 +259,9 @@ impl VulkanEngine {
   pub fn cleanup(&mut self) {
     if self.is_initialized {
       // using the deletion queue for everything, unlike the tutorial
-      self.main_deletion_queue.flush(self.instance, self.device);
+      self
+        .main_deletion_queue
+        .flush(self.instance, self.device, self.allocator);
     }
   }
 
@@ -287,16 +323,12 @@ impl VulkanEngine {
       };
       vkCmdBeginRenderPass(cmd, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
 
-      if self.selected_shader == 0 {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, self.triangle_pipeline);
-      } else {
-        vkCmdBindPipeline(
-          cmd,
-          VK_PIPELINE_BIND_POINT_GRAPHICS,
-          self.red_triangle_pipeline,
-        );
-      }
-      vkCmdDraw(cmd, 3, 1, 0, 0);
+      vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, self.mesh_pipeline);
+
+      let offset = 0;
+      vkCmdBindVertexBuffers(cmd, 0, 1, &self.triangle_mesh.vertex_buffer.buffer, &offset);
+
+      vkCmdDraw(cmd, self.triangle_mesh.vertices.len() as u32, 1, 0, 0);
 
       // finalize the render render_pass
       vkCmdEndRenderPass(cmd);
@@ -426,6 +458,51 @@ impl VulkanEngine {
 
     self.present_queue = device.present_queue;
     self.present_queue_index = device.present_queue_index;
+
+    let vulkan_functions = VmaVulkanFunctions {
+      vkGetPhysicalDeviceProperties: unsafe { vkGetPhysicalDeviceProperties },
+      vkGetPhysicalDeviceMemoryProperties: unsafe { vkGetPhysicalDeviceMemoryProperties },
+      vkAllocateMemory: unsafe { vkAllocateMemory },
+      vkFreeMemory: unsafe { vkFreeMemory },
+      vkMapMemory: unsafe { vkMapMemory },
+      vkUnmapMemory: unsafe { vkUnmapMemory },
+      vkFlushMappedMemoryRanges: unsafe { vkFlushMappedMemoryRanges },
+      vkInvalidateMappedMemoryRanges: unsafe { vkInvalidateMappedMemoryRanges },
+      vkBindBufferMemory: unsafe { vkBindBufferMemory },
+      vkBindImageMemory: unsafe { vkBindImageMemory },
+      vkGetBufferMemoryRequirements: unsafe { vkGetBufferMemoryRequirements },
+      vkGetImageMemoryRequirements: unsafe { vkGetImageMemoryRequirements },
+      vkCreateBuffer: unsafe { vkCreateBuffer },
+      vkDestroyBuffer: unsafe { vkDestroyBuffer },
+      vkCreateImage: unsafe { vkCreateImage },
+      vkDestroyImage: unsafe { vkDestroyImage },
+      vkCmdCopyBuffer: unsafe { vkCmdCopyBuffer },
+      vkGetBufferMemoryRequirements2KHR: unsafe { vkGetBufferMemoryRequirements2 },
+      vkGetImageMemoryRequirements2KHR: unsafe { vkGetImageMemoryRequirements2 },
+      vkBindBufferMemory2KHR: unsafe { vkBindBufferMemory2 },
+      vkBindImageMemory2KHR: unsafe { vkBindImageMemory2 },
+      vkGetPhysicalDeviceMemoryProperties2KHR: unsafe { vkGetPhysicalDeviceMemoryProperties2 },
+    };
+    let allocator_info = VmaAllocatorCreateInfo {
+      flags: 0,
+      physicalDevice: self.chosen_gpu,
+      device: self.device,
+      preferredLargeHeapBlockSize: 0,
+      pAllocationCallbacks: null(),
+      pDeviceMemoryCallbacks: null(),
+      frameInUseCount: 0,
+      pHeapSizeLimit: null(),
+      pVulkanFunctions: &vulkan_functions,
+      pRecordSettings: null(),
+      instance: self.instance,
+      vulkanApiVersion: vkcapi::VK_MAKE_VERSION!(1, 1, 0),
+    };
+    unsafe {
+      vmaCreateAllocator(&allocator_info, &mut self.allocator);
+    }
+    self
+      .main_deletion_queue
+      .push(Resource::VmaAllocator(self.allocator));
     Ok(())
   }
 
@@ -699,6 +776,11 @@ impl VulkanEngine {
       return Err(Error::Str("Error when building triangle.frag.spv"));
     }
 
+    let (ok, mesh_vert_shader) = self.create_shader_module("shaders/tri_mesh.vert.spv")?;
+    if !ok {
+      return Err(Error::Str("Error when building tri_mesh.vert.spv"));
+    }
+
     // build the pipeline layout that controls the inputs/outputs of the shader
     // we are not using descriptor sets or other system yet so no need to use
     // anything other than the empty default.
@@ -727,7 +809,9 @@ impl VulkanEngine {
         triangle_frag_shader,
       ))
       // vertex input controls how to read vertices from vertes buffers. We aren't using it yet
-      .vertex_input_info(vkinit::vertex_input_state_create_info())
+      .vertex_input_info(vkinit::vertex_input_state_create_info(
+        None, None, None, None,
+      ))
       // input assembly is the configuration for drawing triangle lists, strips, or individual
       // points. We are just going to draw triangle list.
       .input_assembly(vkinit::input_assembly_state_create_info(
@@ -773,7 +857,9 @@ impl VulkanEngine {
         VK_SHADER_STAGE_FRAGMENT_BIT,
         red_triangle_frag_shader,
       ))
-      .vertex_input_info(vkinit::vertex_input_state_create_info())
+      .vertex_input_info(vkinit::vertex_input_state_create_info(
+        None, None, None, None,
+      ))
       .input_assembly(vkinit::input_assembly_state_create_info(
         VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
       ))
@@ -802,13 +888,145 @@ impl VulkanEngine {
       .main_deletion_queue
       .push(Resource::VkPipeline(self.red_triangle_pipeline));
 
+    // build the mesh pipeline
+    let vertex_description = Vertex::get_vertex_description();
+
+    self.mesh_pipeline = PipelineBuilder::new()
+      .push_shader_stage(vkinit::pipeline_shader_stage_create_info(
+        VK_SHADER_STAGE_VERTEX_BIT,
+        mesh_vert_shader,
+      ))
+      .push_shader_stage(vkinit::pipeline_shader_stage_create_info(
+        VK_SHADER_STAGE_FRAGMENT_BIT,
+        triangle_frag_shader,
+      ))
+      // connect the pipeline builder vertex input info to the one we get from Vertex
+      .vertex_input_info(vkinit::vertex_input_state_create_info(
+        Some(vertex_description.bindings.len() as u32),
+        Some(vertex_description.bindings.as_ptr()),
+        Some(vertex_description.attributes.len() as u32),
+        Some(vertex_description.attributes.as_ptr()),
+      ))
+      .input_assembly(vkinit::input_assembly_state_create_info(
+        VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+      ))
+      .viewport(vkinit::viewport(
+        0.0,
+        0.0,
+        self.window_extent.width as f32,
+        self.window_extent.height as f32,
+        0.0,
+        1.0,
+      ))
+      .scissor(vkinit::rect_2d(
+        0,
+        0,
+        self.window_extent.width,
+        self.window_extent.height,
+      ))
+      .rasterizer(vkinit::rasterization_state_create_info(
+        VK_POLYGON_MODE_FILL,
+      ))
+      .multisampling(vkinit::multisampling_state_create_info())
+      .color_blend_attachment(vkinit::color_blend_attachment_state())
+      .pipeline_layout(self.triangle_pipeline_layout)
+      .build(self.device, self.render_pass)?;
+    self
+      .main_deletion_queue
+      .push(Resource::VkPipeline(self.mesh_pipeline));
+
     unsafe {
       vkDestroyShaderModule(self.device, triangle_vert_shader, null());
       vkDestroyShaderModule(self.device, triangle_frag_shader, null());
 
       vkDestroyShaderModule(self.device, red_triangle_vert_shader, null());
       vkDestroyShaderModule(self.device, red_triangle_frag_shader, null());
+
+      vkDestroyShaderModule(self.device, mesh_vert_shader, null());
     }
     Ok(())
   }
+
+  fn load_meshes(&mut self) -> Result<(), Error> {
+    // make the array 3 vertices long
+    self.triangle_mesh.vertices.resize(3, unsafe { zeroed() });
+
+    // vertex positions
+    self.triangle_mesh.vertices[0].position = Vec3::new(1.0, 1.0, 0.0);
+    self.triangle_mesh.vertices[1].position = Vec3::new(-1.0, 1.0, 0.0);
+    self.triangle_mesh.vertices[2].position = Vec3::new(0.0, -1.0, 0.0);
+
+    // vertex colors, all green
+    self.triangle_mesh.vertices[0].color = Vec3::new(0.0, 1.0, 0.0);
+    self.triangle_mesh.vertices[1].color = Vec3::new(0.0, 1.0, 0.0);
+    self.triangle_mesh.vertices[2].color = Vec3::new(0.0, 1.0, 0.0);
+
+    upload_mesh(
+      self.allocator,
+      &mut self.triangle_mesh,
+      &mut self.main_deletion_queue,
+    )?;
+    Ok(())
+  }
+}
+
+fn upload_mesh(
+  allocator: VmaAllocator,
+  mesh: &mut Mesh,
+  deletion_queue: &mut ResourceDestuctor,
+) -> Result<(), Error> {
+  // allocate vertex buffer
+  let buffer_info = VkBufferCreateInfo {
+    sType: VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+    pNext: null(),
+    flags: 0,
+    // total size in bytes of the buffer
+    size: (size_of::<Vertex>() * mesh.vertices.len()) as u64,
+    // this buffer is going to be used as a Vertex buffer
+    usage: VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    sharingMode: 0,
+    queueFamilyIndexCount: 0,
+    pQueueFamilyIndices: null(),
+  };
+
+  // let the VMA library know that this data should be writeable by CPU,
+  // but also readable by the GPU.
+  let vma_alloc_info = VmaAllocationCreateInfo {
+    flags: 0,
+    usage: VMA_MEMORY_USAGE_CPU_TO_GPU,
+    requiredFlags: 0,
+    preferredFlags: 0,
+    memoryTypeBits: 0,
+    pool: null(),
+    pUserData: null_mut(),
+    priority: 0.0,
+  };
+
+  // allocate the buffer
+  unsafe {
+    VK_CHECK!(vmaCreateBuffer(
+      allocator,
+      &buffer_info,
+      &vma_alloc_info,
+      &mut mesh.vertex_buffer.buffer,
+      &mut mesh.vertex_buffer.allocation,
+      null_mut()
+    ));
+  }
+
+  deletion_queue.push(Resource::VmaAllocatedBuffer(mesh.vertex_buffer));
+
+  // copy vertex data
+  unsafe {
+    let mut data = null_mut();
+    vmaMapMemory(allocator, mesh.vertex_buffer.allocation, &mut data);
+    copy_nonoverlapping(
+      mesh.vertices.as_ptr(),
+      data as *mut Vertex,
+      size_of::<Vertex>() * mesh.vertices.len(),
+    );
+    vmaUnmapMemory(allocator, mesh.vertex_buffer.allocation);
+  }
+
+  Ok(())
 }

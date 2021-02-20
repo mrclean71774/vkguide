@@ -65,8 +65,13 @@ pub fn pipeline_shader_stage_create_info(
   info
 }
 
-pub fn vertex_input_state_create_info() -> VkPipelineVertexInputStateCreateInfo {
-  let info = VkPipelineVertexInputStateCreateInfo {
+pub fn vertex_input_state_create_info(
+  vertex_binding_description_count: Option<u32>,
+  p_vertex_binding_descriptions: Option<*const VkVertexInputBindingDescription>,
+  vertex_attribute_description_count: Option<u32>,
+  p_vertex_attribute_descriptions: Option<*const VkVertexInputAttributeDescription>,
+) -> VkPipelineVertexInputStateCreateInfo {
+  let mut info = VkPipelineVertexInputStateCreateInfo {
     sType: VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
     pNext: null(),
     flags: 0,
@@ -76,6 +81,18 @@ pub fn vertex_input_state_create_info() -> VkPipelineVertexInputStateCreateInfo 
     vertexAttributeDescriptionCount: 0,
     pVertexAttributeDescriptions: null(),
   };
+  if vertex_binding_description_count.is_some() {
+    info.vertexBindingDescriptionCount = vertex_binding_description_count.unwrap();
+  }
+  if p_vertex_binding_descriptions.is_some() {
+    info.pVertexBindingDescriptions = p_vertex_binding_descriptions.unwrap();
+  }
+  if vertex_attribute_description_count.is_some() {
+    info.vertexAttributeDescriptionCount = vertex_attribute_description_count.unwrap();
+  }
+  if p_vertex_attribute_descriptions.is_some() {
+    info.pVertexAttributeDescriptions = p_vertex_attribute_descriptions.unwrap();
+  }
   info
 }
 

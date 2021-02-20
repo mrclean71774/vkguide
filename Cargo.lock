@@ -2,9 +2,9 @@
 # It is not intended for manual editing.
 [[package]]
 name = "cc"
-version = "1.0.66"
+version = "1.0.67"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c0496836a84f8d0495758516b8621a622beb77c0fed418570e50764093ced48"
+checksum = "e3c69b077ad434294d3ce9f1f6143a2a4b89a8a2d54ef813d85003a4fd1137fd"
 
 [[package]]
 name = "cfg-if"
@@ -82,7 +82,7 @@ dependencies = [
 [[package]]
 name = "vma"
 version = "0.0.1"
-source = "git+https://github.com/mrclean71774/vma#c306c0b9ab9c83b83a6267f48c402cdb692f2199"
+source = "git+https://github.com/mrclean71774/vma#ac3c34340f1043643179bea810e31f49ab6ea9a9"
 dependencies = [
  "cc",
  "vkcapi",

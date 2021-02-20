@@ -1,4 +1,5 @@
 mod error;
+mod mesh;
 mod vk_engine;
 mod vk_initializers;
 mod vk_pipeline;

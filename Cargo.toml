@@ -11,7 +11,7 @@ lina = { git = "https://github.com/mrclean71774/lina" }
 sdl2 = { git = "https://github.com/mrclean71774/sdl2" }
 vkcapi = { git = "https://github.com/mrclean71774/vkcapi" }
 vkcboot = { git = "https://github.com/mrclean71774/vkcboot" }
-vma = { git = "https://github.com/mrclean71774/vma" }
+vma = { git = "https://github.com/mrclean71774/vma", features = ["version1_1"] }
 
 [features]
 validation = ["vkcboot/validation"]
