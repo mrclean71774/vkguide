@@ -7,9 +7,10 @@ use {
     vk_types::AllocatedBuffer,
     VK_CHECK,
   },
-  lina::vec3::Vec3,
+  lina::{mat4::Mat4, vec3::Vec3, vec4::Vec4},
   sdl2::*,
   std::{
+    ffi::c_void,
     mem::{size_of, zeroed},
     ptr::{copy_nonoverlapping, null, null_mut},
   },
@@ -107,6 +108,13 @@ impl ResourceDestuctor {
   }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct MeshPushConstants {
+  data: Vec4,
+  render_matrix: Mat4,
+}
+
 pub struct VulkanEngine {
   is_initialized: bool,
   frame_number: i32,
@@ -143,6 +151,8 @@ pub struct VulkanEngine {
   render_fence: VkFence,
 
   triangle_pipeline_layout: VkPipelineLayout,
+  mesh_pipeline_layout: VkPipelineLayout,
+
   triangle_pipeline: VkPipeline,
   red_triangle_pipeline: VkPipeline,
 
@@ -196,6 +206,8 @@ impl VulkanEngine {
       render_fence: null(),
 
       triangle_pipeline_layout: null(),
+      mesh_pipeline_layout: null(),
+
       triangle_pipeline: null(),
       red_triangle_pipeline: null(),
 
@@ -327,6 +339,36 @@ impl VulkanEngine {
 
       let offset = 0;
       vkCmdBindVertexBuffers(cmd, 0, 1, &self.triangle_mesh.vertex_buffer.buffer, &offset);
+
+      // make a model view matrix for rendering the object
+      // camera position
+      let cam_pos = Vec3::new(0.0, 0.0, -2.0);
+      let view = Mat4::translate_matrix(cam_pos.x, cam_pos.y, cam_pos.z);
+      // camera projection
+      let mut projection =
+        Mat4::perspective_matrix(lina::radians!(70.0), 1700.0 / 900.0, 0.1, 200.0);
+      projection.c2r2 *= -1.0;
+      // model rotation
+      let model =
+        Mat4::rotate_vec_angle_matrix(0.0, 1.0, 0.0, lina::radians!(self.frame_number as f32));
+
+      // calculate final mesh matrix
+      let mesh_matrix = projection * view * model;
+
+      let constants = MeshPushConstants {
+        data: Vec4::new(0.0, 0.0, 0.0, 0.0),
+        render_matrix: mesh_matrix,
+      };
+
+      // upload the matrix to the GPU via push constants
+      vkCmdPushConstants(
+        cmd,
+        self.mesh_pipeline_layout,
+        VK_SHADER_STAGE_VERTEX_BIT,
+        0,
+        size_of::<MeshPushConstants>() as u32,
+        &constants as *const MeshPushConstants as *const c_void,
+      );
 
       vkCmdDraw(cmd, self.triangle_mesh.vertices.len() as u32, 1, 0, 0);
 
@@ -797,6 +839,31 @@ impl VulkanEngine {
       .main_deletion_queue
       .push(Resource::VkPipelineLayout(self.triangle_pipeline_layout));
 
+    // we start from just the default empy pipeline layout info
+    let mut mesh_pipeline_layout_info = vkinit::pipeline_layout_create_info();
+    // setup push constants
+    let push_constant = VkPushConstantRange {
+      // this push constant range is accessible only in the vertex shader
+      stageFlags: VK_SHADER_STAGE_VERTEX_BIT,
+      // this push constant range starts at the beginning
+      offset: 0,
+      // this push constant takes up the size of a MeshPushConstants struct
+      size: size_of::<MeshPushConstants>() as u32,
+    };
+    mesh_pipeline_layout_info.pushConstantRangeCount = 1;
+    mesh_pipeline_layout_info.pPushConstantRanges = &push_constant;
+    unsafe {
+      VK_CHECK!(vkCreatePipelineLayout(
+        self.device,
+        &mesh_pipeline_layout_info,
+        null(),
+        &mut self.mesh_pipeline_layout
+      ));
+    }
+    self
+      .main_deletion_queue
+      .push(Resource::VkPipelineLayout(self.mesh_pipeline_layout));
+
     self.triangle_pipeline = PipelineBuilder::new()
       // build the stage-create-info for both vertex and fragment stages.
       // This lets the pipeline know the shader modules per stage
@@ -929,7 +996,7 @@ impl VulkanEngine {
       ))
       .multisampling(vkinit::multisampling_state_create_info())
       .color_blend_attachment(vkinit::color_blend_attachment_state())
-      .pipeline_layout(self.triangle_pipeline_layout)
+      .pipeline_layout(self.mesh_pipeline_layout)
       .build(self.device, self.render_pass)?;
     self
       .main_deletion_queue
