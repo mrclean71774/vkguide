@@ -158,6 +158,7 @@ pub struct VulkanEngine {
 
   mesh_pipeline: VkPipeline,
   triangle_mesh: Mesh,
+  monkey_mesh: Mesh,
 
   main_deletion_queue: ResourceDestuctor,
   allocator: VmaAllocator,
@@ -213,6 +214,7 @@ impl VulkanEngine {
 
       mesh_pipeline: null(),
       triangle_mesh: Mesh::new(),
+      monkey_mesh: Mesh::load_gltf("assets/monkey.glb").unwrap(),
 
       main_deletion_queue: ResourceDestuctor::new(),
       allocator: null(),
@@ -338,7 +340,7 @@ impl VulkanEngine {
       vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, self.mesh_pipeline);
 
       let offset = 0;
-      vkCmdBindVertexBuffers(cmd, 0, 1, &self.triangle_mesh.vertex_buffer.buffer, &offset);
+      vkCmdBindVertexBuffers(cmd, 0, 1, &self.monkey_mesh.vertex_buffer.buffer, &offset);
 
       // make a model view matrix for rendering the object
       // camera position
@@ -370,7 +372,7 @@ impl VulkanEngine {
         &constants as *const MeshPushConstants as *const c_void,
       );
 
-      vkCmdDraw(cmd, self.triangle_mesh.vertices.len() as u32, 1, 0, 0);
+      vkCmdDraw(cmd, self.monkey_mesh.vertices.len() as u32, 1, 0, 0);
 
       // finalize the render render_pass
       vkCmdEndRenderPass(cmd);
@@ -1031,6 +1033,13 @@ impl VulkanEngine {
     upload_mesh(
       self.allocator,
       &mut self.triangle_mesh,
+      &mut self.main_deletion_queue,
+    )?;
+
+    //self.monkey_mesh = Mesh::load_gltf("assets/monkey.glb")?;
+    upload_mesh(
+      self.allocator,
+      &mut self.monkey_mesh,
       &mut self.main_deletion_queue,
     )?;
     Ok(())

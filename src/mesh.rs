@@ -1,5 +1,8 @@
 use {
-  crate::vk_types::AllocatedBuffer, lina::vec3::Vec3, std::mem::size_of, vkcapi::core::v1_0::*,
+  crate::{error::Error, vk_types::AllocatedBuffer},
+  lina::vec3::Vec3,
+  std::mem::size_of,
+  vkcapi::core::v1_0::*,
 };
 
 #[derive(Clone)]
@@ -28,6 +31,13 @@ pub struct Vertex {
 }
 
 impl Vertex {
+  pub fn new3v3(position: Vec3, normal: Vec3, color: Vec3) -> Vertex {
+    Vertex {
+      position,
+      normal,
+      color,
+    }
+  }
   pub fn get_vertex_description() -> VertexInputDescription {
     let mut description = VertexInputDescription::new();
 
@@ -83,5 +93,44 @@ impl Mesh {
       vertices: Vec::new(),
       vertex_buffer: AllocatedBuffer::null(),
     }
+  }
+
+  // we are using gltf instead of obj like the tutorial because I think it's a better
+  // format and there is a library available to load it.
+  pub fn load_gltf(filename: &str) -> Result<Mesh, Error> {
+    let (document, buffers, _images) = gltf::import(filename).map_err(|e| Error::FromGltf(e))?;
+
+    let mut result = Mesh::new();
+    // we are depending on the fact that we created the gltf file and know
+    // that it contains 1 mesh and nothing else
+
+    // get the first mesh or panic if there is no mesh in file
+    let mesh = document.meshes().next().unwrap();
+    for primitive in mesh.primitives() {
+      // we are taking an idexed buffer and turning it into a non indexed buffer because
+      // we haven't done indexed drawing in the tutorial yet.
+
+      let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+      let positions: Vec<Vec3> = reader
+        .read_positions()
+        .unwrap()
+        .map(|v| Vec3::new(v[0], v[1], v[2]))
+        .collect();
+      let normals: Vec<Vec3> = reader
+        .read_normals()
+        .unwrap()
+        .map(|n| Vec3::new(n[0], n[1], n[2]))
+        .collect();
+      let indices: Vec<u32> = reader.read_indices().unwrap().into_u32().collect();
+
+      for index in indices {
+        result.vertices.push(Vertex::new3v3(
+          positions[index as usize],
+          normals[index as usize],
+          normals[index as usize],
+        ));
+      }
+    }
+    Ok(result)
   }
 }

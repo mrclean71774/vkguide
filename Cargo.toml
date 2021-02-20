@@ -13,6 +13,8 @@ vkcapi = { git = "https://github.com/mrclean71774/vkcapi" }
 vkcboot = { git = "https://github.com/mrclean71774/vkcboot" }
 vma = { git = "https://github.com/mrclean71774/vma", features = ["version1_1"] }
 
+gltf = "0.15.0"
+
 [features]
 validation = ["vkcboot/validation"]
 default = ["validation"]
