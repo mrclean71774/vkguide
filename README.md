@@ -9,3 +9,11 @@ There is a branch for each subchapter that adds code.
  - vkcapi => My Vulkan bindings.
  - vkcboot => My Vulkan initialization library built on top of vkcapi.
  - vma => My bindings to AMD's Vulkan Memory Allocator.
+
+# Completed
+ [x] Chapter 0
+ [x] Chapter 1
+ [x] Chapter 2
+ [ ] Chapter 3
+ [ ] Chapter 4
+ [ ] Chapter 5
