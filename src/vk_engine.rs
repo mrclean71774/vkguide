@@ -214,6 +214,12 @@ impl VulkanEngine {
 
       mesh_pipeline: null(),
       triangle_mesh: Mesh::new(),
+      // I can't figure out why but if we initialize monkey mesh with Mesh::new()
+      // here and then do this call in load_meshes the program will crash with invalid
+      // address during the memcpy.  I have tried associated function and method with
+      // &mut self, but they all crash in the same place.  The data looks good in the
+      // debugger as far as I can tell. Stumped but it works if inialized here.
+      //monkey_mesh: Mesh::new(),
       monkey_mesh: Mesh::load_gltf("assets/monkey.glb").unwrap(),
 
       main_deletion_queue: ResourceDestuctor::new(),
@@ -1037,6 +1043,8 @@ impl VulkanEngine {
     )?;
 
     //self.monkey_mesh = Mesh::load_gltf("assets/monkey.glb")?;
+    //self.monkey_mesh.load_gltf("assets/monkey.glb")?;
+
     upload_mesh(
       self.allocator,
       &mut self.monkey_mesh,
