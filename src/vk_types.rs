@@ -17,3 +17,18 @@ impl AllocatedBuffer {
     }
   }
 }
+
+#[derive(Clone, Copy)]
+pub struct AllocatedImage {
+  pub image: VkImage,
+  pub allocation: VmaAllocation,
+}
+
+impl AllocatedImage {
+  pub fn null() -> AllocatedImage {
+    AllocatedImage {
+      image: null(),
+      allocation: null(),
+    }
+  }
+}

@@ -167,6 +167,31 @@ pub fn color_blend_attachment_state() -> VkPipelineColorBlendAttachmentState {
   color_blend_attachment
 }
 
+pub fn depth_stencil_create_info(
+  b_depth_test: bool,
+  b_depth_write: bool,
+  compare_op: VkCompareOp,
+) -> VkPipelineDepthStencilStateCreateInfo {
+  VkPipelineDepthStencilStateCreateInfo {
+    sType: VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+    pNext: null(),
+    flags: 0,
+    depthTestEnable: if b_depth_test { VK_TRUE } else { VK_FALSE },
+    depthWriteEnable: if b_depth_write { VK_TRUE } else { VK_FALSE },
+    depthCompareOp: if b_depth_test {
+      compare_op
+    } else {
+      VK_COMPARE_OP_ALWAYS
+    },
+    depthBoundsTestEnable: VK_FALSE,
+    stencilTestEnable: VK_FALSE,
+    front: unsafe { zeroed() },
+    back: unsafe { zeroed() },
+    minDepthBounds: 0.0,
+    maxDepthBounds: 1.0,
+  }
+}
+
 pub fn pipeline_layout_create_info() -> VkPipelineLayoutCreateInfo {
   VkPipelineLayoutCreateInfo {
     sType: VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -194,5 +219,52 @@ pub fn viewport(
     height,
     minDepth: min_depth,
     maxDepth: max_depth,
+  }
+}
+
+pub fn image_create_info(
+  format: VkFormat,
+  usage_flags: VkImageUsageFlags,
+  extent: VkExtent3D,
+) -> VkImageCreateInfo {
+  VkImageCreateInfo {
+    sType: VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+    pNext: null(),
+    flags: 0,
+    imageType: VK_IMAGE_TYPE_2D,
+    format: format,
+    extent: extent,
+    mipLevels: 1,
+    arrayLayers: 1,
+    samples: VK_SAMPLE_COUNT_1_BIT,
+    tiling: VK_IMAGE_TILING_OPTIMAL,
+    usage: usage_flags,
+    sharingMode: 0,
+    queueFamilyIndexCount: 0,
+    pQueueFamilyIndices: null(),
+    initialLayout: 0,
+  }
+}
+
+pub fn imageview_create_info(
+  format: VkFormat,
+  image: VkImage,
+  aspect_flags: VkImageAspectFlags,
+) -> VkImageViewCreateInfo {
+  VkImageViewCreateInfo {
+    sType: VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+    pNext: null(),
+    flags: 0,
+    image,
+    viewType: VK_IMAGE_VIEW_TYPE_2D,
+    format,
+    components: unsafe { zeroed() },
+    subresourceRange: VkImageSubresourceRange {
+      aspectMask: aspect_flags,
+      baseMipLevel: 0,
+      levelCount: 1,
+      baseArrayLayer: 0,
+      layerCount: 1,
+    },
   }
 }

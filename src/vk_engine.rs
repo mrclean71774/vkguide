@@ -4,7 +4,7 @@ use {
     mesh::{Mesh, Vertex},
     vk_initializers as vkinit,
     vk_pipeline::PipelineBuilder,
-    vk_types::AllocatedBuffer,
+    vk_types::{AllocatedBuffer, AllocatedImage},
     VK_CHECK,
   },
   lina::{mat4::Mat4, vec3::Vec3, vec4::Vec4},
@@ -46,6 +46,7 @@ pub enum Resource {
   VkPipeline(VkPipeline),
   VmaAllocator(VmaAllocator),
   VmaAllocatedBuffer(AllocatedBuffer),
+  VmaAllocatedImage(AllocatedImage),
 }
 
 pub struct ResourceDestuctor {
@@ -103,6 +104,9 @@ impl ResourceDestuctor {
             allocated_buffer.allocation,
           )
         },
+        Resource::VmaAllocatedImage(allocated_image) => unsafe {
+          vmaDestroyImage(allocator, allocated_image.image, allocated_image.allocation)
+        },
       }
     }
   }
@@ -139,6 +143,10 @@ pub struct VulkanEngine {
   swapchain_format: VkFormat, // image format expected by windowing system
   swapchain_images: Vec<VkImage>, // array of images from the swapchain
   swapchain_image_views: Vec<VkImageView>, // array of image-views from the swapchain
+
+  depth_image_view: VkImageView,
+  depth_image: AllocatedImage,
+  depth_format: VkFormat,
 
   command_pool: VkCommandPool, // the command pool for our commands
   main_command_buffer: VkCommandBuffer, // the buffer we will record into
@@ -196,6 +204,10 @@ impl VulkanEngine {
       swapchain_images: Vec::new(),
       swapchain_image_views: Vec::new(),
 
+      depth_image_view: null(),
+      depth_image: AllocatedImage::null(),
+      depth_format: 0,
+
       command_pool: null(),
       main_command_buffer: null(),
 
@@ -214,12 +226,6 @@ impl VulkanEngine {
 
       mesh_pipeline: null(),
       triangle_mesh: Mesh::new(),
-      // I can't figure out why but if we initialize monkey mesh with Mesh::new()
-      // here and then do this call in load_meshes the program will crash with invalid
-      // address during the memcpy.  I have tried associated function and method with
-      // &mut self, but they all crash in the same place.  The data looks good in the
-      // debugger as far as I can tell. Stumped but it works if inialized here.
-      //monkey_mesh: Mesh::new(),
       monkey_mesh: Mesh::load_gltf("assets/monkey.glb").unwrap(),
 
       main_deletion_queue: ResourceDestuctor::new(),
@@ -330,6 +336,13 @@ impl VulkanEngine {
       let flash = f32::abs(f32::sin(self.frame_number as f32 / 120.0));
       let clear_value = vkinit::clear_value_f32(0.0, 0.0, flash, 1.0);
 
+      let depth_clear = VkClearValue {
+        depthStencil: VkClearDepthStencilValue {
+          depth: 1.0,
+          stencil: 0,
+        },
+      };
+
       // start the main renderpass. We will use the clear color from above,
       // and the framebuffer of the index the swapchain gave us.
       let rp_info = VkRenderPassBeginInfo {
@@ -338,8 +351,8 @@ impl VulkanEngine {
         renderPass: self.render_pass,
         framebuffer: self.framebuffers[swapchain_image_index as usize],
         renderArea: vkinit::rect_2d(0, 0, self.window_extent.width, self.window_extent.height),
-        clearValueCount: 1,
-        pClearValues: &clear_value,
+        clearValueCount: 2,
+        pClearValues: [clear_value, depth_clear].as_ptr(),
       };
       vkCmdBeginRenderPass(cmd, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -585,6 +598,69 @@ impl VulkanEngine {
         .main_deletion_queue
         .push(Resource::VkImageView(self.swapchain_image_views[i]));
     }
+
+    // depth image size will match the window
+    let depth_image_extent = VkExtent3D {
+      width: self.window_extent.width,
+      height: self.window_extent.height,
+      depth: 1,
+    };
+
+    // hardcoding the depth format to f32
+    self.depth_format = VK_FORMAT_D32_SFLOAT;
+
+    // the depth imag will be an image with the format we selected and depth attachment usage flag
+    let d_img_create_info = vkinit::image_create_info(
+      self.depth_format,
+      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+      depth_image_extent,
+    );
+
+    // for the depth image, we want to allocate it from GPU local memory
+    let d_img_alloc_info = VmaAllocationCreateInfo {
+      flags: 0,
+      usage: VMA_MEMORY_USAGE_GPU_ONLY,
+      requiredFlags: VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+      preferredFlags: 0,
+      memoryTypeBits: 0,
+      pool: null(),
+      pUserData: null_mut(),
+      priority: 0.0,
+    };
+    // allocate and create the image
+    unsafe {
+      vmaCreateImage(
+        self.allocator,
+        &d_img_create_info,
+        &d_img_alloc_info,
+        &mut self.depth_image.image,
+        &mut self.depth_image.allocation,
+        null_mut(),
+      );
+    }
+    // build an image-view for the depth image to use for rendering
+    let d_view_create_info = vkinit::imageview_create_info(
+      self.depth_format,
+      self.depth_image.image,
+      VK_IMAGE_ASPECT_DEPTH_BIT,
+    );
+    unsafe {
+      VK_CHECK!(vkCreateImageView(
+        self.device,
+        &d_view_create_info,
+        null(),
+        &mut self.depth_image_view
+      ));
+    }
+
+    // add to deletion queue
+    self
+      .main_deletion_queue
+      .push(Resource::VmaAllocatedImage(self.depth_image));
+    self
+      .main_deletion_queue
+      .push(Resource::VkImageView(self.depth_image_view));
+
     Ok(())
   }
 
@@ -650,6 +726,22 @@ impl VulkanEngine {
       layout: VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
     };
 
+    let depth_attachment = VkAttachmentDescription {
+      flags: 0,
+      format: self.depth_format,
+      samples: VK_SAMPLE_COUNT_1_BIT,
+      loadOp: VK_ATTACHMENT_LOAD_OP_CLEAR,
+      storeOp: VK_ATTACHMENT_STORE_OP_STORE,
+      stencilLoadOp: VK_ATTACHMENT_LOAD_OP_CLEAR,
+      stencilStoreOp: VK_ATTACHMENT_STORE_OP_DONT_CARE,
+      initialLayout: VK_IMAGE_LAYOUT_UNDEFINED,
+      finalLayout: VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+    let depth_attachment_ref = VkAttachmentReference {
+      attachment: 1,
+      layout: VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+
     // we are going to create 1 subpass, which is the minimum you can do
     let subpass = VkSubpassDescription {
       flags: 0,
@@ -659,7 +751,7 @@ impl VulkanEngine {
       colorAttachmentCount: 1,
       pColorAttachments: &color_attachment_ref,
       pResolveAttachments: null(),
-      pDepthStencilAttachment: null(),
+      pDepthStencilAttachment: &depth_attachment_ref,
       preserveAttachmentCount: 0,
       pPreserveAttachments: null(),
     };
@@ -669,8 +761,8 @@ impl VulkanEngine {
       pNext: null(),
       flags: 0,
       // connect the color attachment to the info
-      attachmentCount: 1,
-      pAttachments: &color_attachment,
+      attachmentCount: 2,
+      pAttachments: [color_attachment, depth_attachment].as_ptr(),
       // conntect the subpass to the info
       subpassCount: 1,
       pSubpasses: &subpass,
@@ -700,7 +792,7 @@ impl VulkanEngine {
       pNext: null(),
       flags: 0,
       renderPass: self.render_pass,
-      attachmentCount: 1,
+      attachmentCount: 2,
       pAttachments: null(),
       width: self.window_extent.width,
       height: self.window_extent.height,
@@ -714,7 +806,7 @@ impl VulkanEngine {
 
     // create framebuffers for each of the swapchain image views
     for i in 0..self.swapchain_image_views.len() {
-      fb_info.pAttachments = &self.swapchain_image_views[i];
+      fb_info.pAttachments = [self.swapchain_image_views[i], self.depth_image_view].as_ptr();
       unsafe {
         VK_CHECK!(vkCreateFramebuffer(
           self.device,
@@ -892,7 +984,7 @@ impl VulkanEngine {
       .input_assembly(vkinit::input_assembly_state_create_info(
         VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
       ))
-      // vuild viewport and scissor from the swapchain extents
+      // build viewport and scissor from the swapchain extents
       .viewport(vkinit::viewport(
         0.0,
         0.0,
@@ -913,6 +1005,11 @@ impl VulkanEngine {
       ))
       // we don't use multisampling, so just run the default one
       .multisampling(vkinit::multisampling_state_create_info())
+      .depth_stencil(vkinit::depth_stencil_create_info(
+        true,
+        true,
+        VK_COMPARE_OP_LESS_OR_EQUAL,
+      ))
       // a single blend attachment with no blending and writing to RGBA
       .color_blend_attachment(vkinit::color_blend_attachment_state())
       // use the triangle layout we created
@@ -956,6 +1053,11 @@ impl VulkanEngine {
         VK_POLYGON_MODE_FILL,
       ))
       .multisampling(vkinit::multisampling_state_create_info())
+      .depth_stencil(vkinit::depth_stencil_create_info(
+        true,
+        true,
+        VK_COMPARE_OP_LESS_OR_EQUAL,
+      ))
       .color_blend_attachment(vkinit::color_blend_attachment_state())
       .pipeline_layout(self.triangle_pipeline_layout)
       .build(self.device, self.render_pass)?;
@@ -1003,6 +1105,11 @@ impl VulkanEngine {
         VK_POLYGON_MODE_FILL,
       ))
       .multisampling(vkinit::multisampling_state_create_info())
+      .depth_stencil(vkinit::depth_stencil_create_info(
+        true,
+        true,
+        VK_COMPARE_OP_LESS_OR_EQUAL,
+      ))
       .color_blend_attachment(vkinit::color_blend_attachment_state())
       .pipeline_layout(self.mesh_pipeline_layout)
       .build(self.device, self.render_pass)?;
@@ -1041,9 +1148,6 @@ impl VulkanEngine {
       &mut self.triangle_mesh,
       &mut self.main_deletion_queue,
     )?;
-
-    //self.monkey_mesh = Mesh::load_gltf("assets/monkey.glb")?;
-    //self.monkey_mesh.load_gltf("assets/monkey.glb")?;
 
     upload_mesh(
       self.allocator,

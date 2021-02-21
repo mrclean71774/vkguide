@@ -97,7 +97,6 @@ impl Mesh {
 
   // we are using gltf instead of obj like the tutorial because I think it's a better
   // format and there is a library available to load it.
-  // pub fn load_gltf(&mut self, filename: &str) -> Result<(), Error> {
   pub fn load_gltf(filename: &str) -> Result<Mesh, Error> {
     let (document, buffers, _images) = gltf::import(filename).map_err(|e| Error::FromGltf(e))?;
 
@@ -125,7 +124,6 @@ impl Mesh {
       let indices: Vec<u32> = reader.read_indices().unwrap().into_u32().collect();
 
       for index in indices {
-        //self.vertices.push(Vertex::new3v3(
         result.vertices.push(Vertex::new3v3(
           positions[index as usize],
           normals[index as usize],
@@ -133,7 +131,6 @@ impl Mesh {
         ));
       }
     }
-    //Ok(())
     Ok(result)
   }
 }

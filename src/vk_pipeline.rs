@@ -9,6 +9,7 @@ pub struct PipelineBuilder {
   rasterizer: Option<VkPipelineRasterizationStateCreateInfo>,
   color_blend_attachment: Option<VkPipelineColorBlendAttachmentState>,
   multisampling: Option<VkPipelineMultisampleStateCreateInfo>,
+  depth_stencil: Option<VkPipelineDepthStencilStateCreateInfo>,
   pipeline_layout: Option<VkPipelineLayout>,
 }
 
@@ -23,6 +24,7 @@ impl PipelineBuilder {
       rasterizer: None,
       color_blend_attachment: None,
       multisampling: None,
+      depth_stencil: None,
       pipeline_layout: None,
     }
   }
@@ -78,6 +80,14 @@ impl PipelineBuilder {
     self
   }
 
+  pub fn depth_stencil(
+    &mut self,
+    depth_stencil: VkPipelineDepthStencilStateCreateInfo,
+  ) -> &mut Self {
+    self.depth_stencil = Some(depth_stencil);
+    self
+  }
+
   pub fn pipeline_layout(&mut self, pipeline_layout: VkPipelineLayout) -> &mut Self {
     self.pipeline_layout = Some(pipeline_layout);
     self
@@ -124,7 +134,11 @@ impl PipelineBuilder {
       pViewportState: &viewport_state,
       pRasterizationState: self.rasterizer.as_ref().unwrap(),
       pMultisampleState: self.multisampling.as_ref().unwrap(),
-      pDepthStencilState: null(),
+      pDepthStencilState: if self.depth_stencil.is_some() {
+        self.depth_stencil.as_ref().unwrap()
+      } else {
+        null()
+      },
       pColorBlendState: &color_blending,
       pDynamicState: null(),
       layout: self.pipeline_layout.unwrap(),
